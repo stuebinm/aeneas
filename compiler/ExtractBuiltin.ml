@@ -44,7 +44,7 @@ let split_on_separator (s : string) : string list =
 
 let flatten_name (name : string list) : string =
   match backend () with
-  | FStar | Coq | HOL4 -> String.concat "_" name
+  | FStar | Coq | HOL4 | IsabelleHOL -> String.concat "_" name
   | Lean -> String.concat "." name
 
 (** Utility for Lean-only definitions **)
@@ -61,7 +61,7 @@ let () =
     is F*, Coq or HOL4, and a different value if the target is Lean.
  *)
 let backend_choice (fstar_coq_hol4 : 'a) (lean : 'a) : 'a =
-  match backend () with Coq | FStar | HOL4 -> fstar_coq_hol4 | Lean -> lean
+  match backend () with Coq | FStar | HOL4 | IsabelleHOL -> fstar_coq_hol4 | Lean -> lean
 
 let builtin_globals : (string * string) list =
   [
@@ -135,10 +135,10 @@ type type_variant_kind =
 
 let mk_struct_constructor (type_name : string) : string =
   let prefix =
-    match backend () with FStar -> "Mk" | Coq | HOL4 -> "mk" | Lean -> ""
+    match backend () with FStar -> "Mk" | Coq | HOL4 | IsabelleHOL -> "mk" | Lean -> ""
   in
   let suffix =
-    match backend () with FStar | Coq | HOL4 -> "" | Lean -> ".mk"
+    match backend () with FStar | Coq | HOL4 | IsabelleHOL -> "" | Lean -> ".mk"
   in
   prefix ^ type_name ^ suffix
 
@@ -168,7 +168,7 @@ let builtin_types () : builtin_type_info list =
                 ( rname,
                   match backend () with
                   | FStar | Lean -> name
-                  | Coq | HOL4 -> extract_name ^ "_" ^ name ))
+                  | Coq | HOL4 | IsabelleHOL -> extract_name ^ "_" ^ name ))
               fields
           in
           let constructor = mk_struct_constructor extract_name in
@@ -201,7 +201,7 @@ let builtin_types () : builtin_type_info list =
       extract_name =
         (match backend () with
         | Lean -> "Option"
-        | Coq | FStar | HOL4 -> "option");
+        | Coq | FStar | HOL4 | IsabelleHOL -> "option");
       keep_params = None;
       body_info =
         Some
@@ -211,7 +211,7 @@ let builtin_types () : builtin_type_info list =
                  rust_variant_name = "None";
                  extract_variant_name =
                    (match backend () with
-                   | FStar | Coq -> "None"
+                   | FStar | Coq | IsabelleHOL -> "None"
                    | Lean -> "none"
                    | HOL4 -> "NONE");
                  fields = None;
@@ -220,7 +220,7 @@ let builtin_types () : builtin_type_info list =
                  rust_variant_name = "Some";
                  extract_variant_name =
                    (match backend () with
-                   | FStar | Coq -> "Some"
+                   | FStar | Coq | IsabelleHOL -> "Some"
                    | Lean -> "some"
                    | HOL4 -> "SOME");
                  fields = None;
@@ -574,7 +574,7 @@ let builtin_trait_decls_info () =
         in
         let type_name =
           match backend () with
-          | FStar | Coq | HOL4 -> StringUtils.lowercase_first_letter type_name
+          | FStar | Coq | HOL4 | IsabelleHOL -> StringUtils.lowercase_first_letter type_name
           | Lean -> type_name
         in
         let clauses = [] in

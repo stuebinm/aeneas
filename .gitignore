@@ -79,3 +79,6 @@ nohup.out
 */.#*
 *.smt2
 .DS_Store
+
+# Isabelle output
+backends/IsabelleHOL/output

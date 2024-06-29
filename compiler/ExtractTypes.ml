@@ -23,7 +23,7 @@ let extract_literal (span : Meta.span) (fmt : F.formatter) (is_pattern : bool)
   | VScalar sv -> (
       match backend () with
       | FStar -> F.pp_print_string fmt (Z.to_string sv.value)
-      | Coq | HOL4 | Lean ->
+      | Coq | HOL4 | Lean | IsabelleHOL ->
           let print_brackets = inside && backend () = HOL4 in
           if print_brackets then F.pp_print_string fmt "(";
           (match backend () with
@@ -54,6 +54,7 @@ let extract_literal (span : Meta.span) (fmt : F.formatter) (is_pattern : bool)
         match backend () with
         | HOL4 -> if b then "T" else "F"
         | Coq | FStar | Lean -> if b then "true" else "false"
+        | IsabelleHOL -> if b then "True" else "False"
       in
       F.pp_print_string fmt b
   | VChar c -> (
@@ -62,6 +63,7 @@ let extract_literal (span : Meta.span) (fmt : F.formatter) (is_pattern : bool)
           (* [#"a"] is a notation for [CHR 97] (97 is the ASCII code for 'a') *)
           F.pp_print_string fmt ("#\"" ^ String.make 1 c ^ "\"")
       | FStar | Lean -> F.pp_print_string fmt ("'" ^ String.make 1 c ^ "'")
+      | IsabelleHOL -> F.pp_print_string fmt ("CHR ''" ^ String.make 1 c ^ "''")
       | Coq ->
           if inside then F.pp_print_string fmt "(";
           F.pp_print_string fmt "char_of_byte";
@@ -105,7 +107,7 @@ let extract_unop (span : Meta.span) (extract_expr : bool -> texpression -> unit)
       (* HOL4 has a special treatment: because it doesn't support dependent
          types, we don't have a specific operator for the cast *)
       match backend () with
-      | HOL4 ->
+      | HOL4 | IsabelleHOL ->
           (* Casting, say, an u32 to an i32 would be done as follows:
              {[
                mk_i32 (u32_to_int x)
@@ -135,7 +137,7 @@ let extract_unop (span : Meta.span) (extract_expr : bool -> texpression -> unit)
              | TInteger src, TInteger tgt ->
                  let cast_str =
                    match backend () with
-                   | Coq | FStar -> "scalar_cast"
+                   | Coq | FStar | IsabelleHOL -> "scalar_cast"
                    | Lean -> "Scalar.cast"
                    | HOL4 -> craise __FILE__ __LINE__ span "Unreachable"
                  in
@@ -148,7 +150,7 @@ let extract_unop (span : Meta.span) (extract_expr : bool -> texpression -> unit)
              | TBool, TInteger tgt ->
                  let cast_str =
                    match backend () with
-                   | Coq | FStar -> "scalar_cast_bool"
+                   | Coq | FStar | IsabelleHOL -> "scalar_cast_bool"
                    | Lean -> "Scalar.cast_bool"
                    | HOL4 -> craise __FILE__ __LINE__ span "Unreachable"
                  in
@@ -205,6 +207,7 @@ let extract_binop (span : Meta.span)
   (* Some binary operations have a special notation depending on the backend *)
   (match (backend (), binop) with
   | HOL4, (Eq | Ne)
+  | IsabelleHOL, (Eq | Ne)
   | (FStar | Coq | Lean), (Eq | Lt | Le | Ne | Ge | Gt)
   | Lean, (Div | Rem | Add | Sub | Mul | Shl | Shr | BitXor | BitOr | BitAnd) ->
       let binop =
@@ -231,7 +234,7 @@ let extract_binop (span : Meta.span)
       in
       let binop =
         match backend () with
-        | FStar | Lean | HOL4 -> binop
+        | FStar | Lean | HOL4 | IsabelleHOL -> binop
         | Coq -> "s" ^ binop
       in
       extract_expr false arg0;
@@ -283,7 +286,7 @@ let is_empty_record_type_decl_group (dg : Pure.type_decl list) : bool =
 let start_fun_decl_group (ctx : extraction_ctx) (fmt : F.formatter)
     (is_rec : bool) (dg : Pure.fun_decl list) =
   match backend () with
-  | FStar | Coq | Lean -> ()
+  | FStar | Coq | Lean | IsabelleHOL -> ()
   | HOL4 ->
       (* In HOL4, opaque functions have a special treatment *)
       if is_single_opaque_fun_decl_group dg then ()
@@ -313,7 +316,7 @@ let start_fun_decl_group (ctx : extraction_ctx) (fmt : F.formatter)
 let end_fun_decl_group (fmt : F.formatter) (is_rec : bool)
     (dg : Pure.fun_decl list) =
   match backend () with
-  | FStar -> ()
+  | FStar | IsabelleHOL -> ()
   | Coq ->
       (* For aesthetic reasons, we print the Coq end group delimiter directly
          in {!extract_fun_decl}. *)
@@ -344,7 +347,7 @@ let end_fun_decl_group (fmt : F.formatter) (is_rec : bool)
 let start_type_decl_group (ctx : extraction_ctx) (fmt : F.formatter)
     (is_rec : bool) (dg : Pure.type_decl list) =
   match backend () with
-  | FStar | Coq -> ()
+  | FStar | Coq | IsabelleHOL -> ()
   | Lean ->
       if is_rec && List.length dg > 1 then (
         F.pp_print_space fmt ();
@@ -371,7 +374,7 @@ let start_type_decl_group (ctx : extraction_ctx) (fmt : F.formatter)
 let end_type_decl_group (fmt : F.formatter) (is_rec : bool)
     (dg : Pure.type_decl list) =
   match backend () with
-  | FStar -> ()
+  | FStar | IsabelleHOL -> ()
   | Coq ->
       (* For aesthetic reasons, we print the Coq end group delimiter directly
          in {!extract_fun_decl}. *)
@@ -402,12 +405,14 @@ let end_type_decl_group (fmt : F.formatter) (is_rec : bool)
         F.pp_print_break fmt 0 0)
 
 let unit_name () =
-  match backend () with Lean -> "Unit" | Coq | FStar | HOL4 -> "unit"
+  match backend () with Lean -> "Unit" | Coq | FStar | HOL4 | IsabelleHOL -> "unit"
 
 (** Small helper *)
 let extract_arrow (fmt : F.formatter) () : unit =
-  if Config.backend () = Lean then F.pp_print_string fmt "→"
-  else F.pp_print_string fmt "->"
+  match Config.backend() with
+  | Lean -> F.pp_print_string fmt "→"
+  | IsabelleHOL -> F.pp_print_string fmt "\\<Rightarrow>"
+  | _ -> F.pp_print_string fmt "->"
 
 let extract_const_generic (span : Meta.span) (ctx : extraction_ctx)
     (fmt : F.formatter) (inside : bool) (cg : const_generic) : unit =
@@ -452,7 +457,7 @@ let extract_ty_errors (fmt : F.formatter) : unit =
   match Config.backend () with
   | FStar | Coq -> F.pp_print_string fmt "admit"
   | Lean -> F.pp_print_string fmt "sorry"
-  | HOL4 -> F.pp_print_string fmt "(* ERROR: could not generate the code *)"
+  | HOL4 | IsabelleHOL -> F.pp_print_string fmt "(* ERROR: could not generate the code *)"
 
 let rec extract_ty (span : Meta.span) (ctx : extraction_ctx) (fmt : F.formatter)
     (no_params_tys : TypeDeclId.Set.t) (inside : bool) (ty : ty) : unit =
@@ -473,7 +478,7 @@ let rec extract_ty (span : Meta.span) (ctx : extraction_ctx) (fmt : F.formatter)
                 let product =
                   match backend () with
                   | FStar -> "&"
-                  | Coq -> "*"
+                  | Coq | IsabelleHOL -> "*"
                   | Lean -> "×"
                   | HOL4 -> "#"
                 in
@@ -517,7 +522,7 @@ let rec extract_ty (span : Meta.span) (ctx : extraction_ctx) (fmt : F.formatter)
               in
               extract_generic_args span ctx fmt no_params_tys generics;
               if print_paren then F.pp_print_string fmt ")"
-          | HOL4 ->
+          | HOL4 | IsabelleHOL ->
               let { types; const_generics; trait_refs } = generics in
               (* Const generics are not supported in HOL4 *)
               cassert __FILE__ __LINE__ (const_generics = []) span
@@ -869,15 +874,16 @@ let extract_type_decl_register_names (ctx : extraction_ctx) (def : type_decl) :
 let extract_type_decl_variant (span : Meta.span) (ctx : extraction_ctx)
     (fmt : F.formatter) (type_decl_group : TypeDeclId.Set.t)
     (type_name : string) (type_params : string list) (cg_params : string list)
-    (cons_name : string) (fields : field list) : unit =
+    (cons_name : string) (fields : field list) (index : int): unit =
   F.pp_print_space fmt ();
   (* variant box *)
   F.pp_open_hvbox fmt ctx.indent_incr;
   (* [| Cons :]
    * Note that we really don't want any break above so we print everything
    * at once. *)
-  let opt_colon = if backend () <> HOL4 then " :" else "" in
-  F.pp_print_string fmt ("| " ^ cons_name ^ opt_colon);
+  let opt_colon = if backend () <> HOL4 && backend () <> IsabelleHOL then " :" else "" in
+  let colon = if backend () <> IsabelleHOL || index <> 0 then "| " else "" in
+  F.pp_print_string fmt (colon ^ cons_name ^ opt_colon);
   let print_field (fid : FieldId.id) (f : field) (ctx : extraction_ctx) :
       extraction_ctx =
     F.pp_print_space fmt ();
@@ -901,7 +907,7 @@ let extract_type_decl_variant (span : Meta.span) (ctx : extraction_ctx)
               F.pp_print_string fmt (field_name ^ " :");
               F.pp_print_space fmt ();
               ctx)
-      | Coq | Lean | HOL4 -> ctx
+      | Coq | Lean | HOL4 | IsabelleHOL -> ctx
     in
     (* Print the field type *)
     let inside = backend () = HOL4 in
@@ -923,7 +929,7 @@ let extract_type_decl_variant (span : Meta.span) (ctx : extraction_ctx)
   (* Sanity check: HOL4 doesn't support const generics *)
   sanity_check __FILE__ __LINE__ (cg_params = [] || backend () <> HOL4) span;
   (* Print the final type *)
-  if backend () <> HOL4 then (
+  if backend () <> HOL4 && backend () <> IsabelleHOL then (
     F.pp_print_space fmt ();
     F.pp_open_hovbox fmt 0;
     F.pp_print_string fmt type_name;
@@ -973,13 +979,13 @@ let extract_type_decl_enum_body (ctx : extraction_ctx) (fmt : F.formatter)
 
      Note that we already printed: [type s =]
   *)
-  let print_variant _variant_id (v : variant) =
+  let print_variant variant_id (v : variant) =
     (* We don't lookup the name, because it may have a prefix for the type
        id (in the case of Lean) *)
     let cons_name = ctx_compute_variant_name ctx def v in
     let fields = v.fields in
     extract_type_decl_variant def.item_meta.span ctx fmt type_decl_group
-      def_name type_params cg_params cons_name fields
+      def_name type_params cg_params cons_name fields (VariantId.to_int variant_id)
   in
   (* Print the variants *)
   let variants = VariantId.mapi (fun vid v -> (vid, v)) variants in
@@ -993,7 +999,7 @@ let extract_type_decl_tuple_struct_body (span : Meta.span)
     F.pp_print_space fmt ();
     F.pp_print_string fmt (unit_name ()))
   else
-    let sep = match backend () with Coq | FStar | HOL4 -> "*" | Lean -> "×" in
+    let sep = match backend () with Coq | FStar | HOL4 | IsabelleHOL -> "*" | Lean -> "×" in
     Collections.List.iter_link
       (fun () ->
         F.pp_print_space fmt ();
@@ -1072,22 +1078,26 @@ let extract_type_decl_struct_body (ctx : extraction_ctx) (fmt : F.formatter)
          (instead of a record). We start with the "normal" case: we extract it
          as a record. *)
     else if (not is_rec) || (backend () <> Coq && backend () <> Lean) then (
-      if backend () <> Lean then F.pp_print_space fmt ();
-      (* If Coq: print the constructor name *)
+      if backend () <> Lean then (
+        if backend () = IsabelleHOL then
+          F.pp_print_string fmt " "
+        else F.pp_print_space fmt ());
+      (* If Coq or Isabelle: print the constructor name *)
       (* TODO: remove superfluous test not is_rec below *)
-      if backend () = Coq && not is_rec then (
+      if (backend () = Coq && not is_rec) || backend () = IsabelleHOL then (
         F.pp_print_string fmt
           (ctx_get_struct def.item_meta.span (TAdtId def.def_id) ctx);
-        F.pp_print_string fmt " ");
+        if backend () = Coq then
+          F.pp_print_string fmt " ");
       (match backend () with
-      | Lean -> ()
+      | Lean | IsabelleHOL -> ()
       | FStar | Coq -> F.pp_print_string fmt "{"
       | HOL4 -> F.pp_print_string fmt "<|");
       F.pp_print_break fmt 1 ctx.indent_incr;
       (* The body itself *)
       (* Open a box for the body *)
       (match backend () with
-      | Coq | FStar | HOL4 -> F.pp_open_hvbox fmt 0
+      | Coq | FStar | HOL4 | IsabelleHOL -> F.pp_open_hvbox fmt 0
       | Lean -> F.pp_open_vbox fmt 0);
       (* Print the fields *)
       let print_field (field_id : FieldId.id) (f : field) : unit =
@@ -1096,12 +1106,19 @@ let extract_type_decl_struct_body (ctx : extraction_ctx) (fmt : F.formatter)
         in
         (* Open a box for the field *)
         F.pp_open_box fmt ctx.indent_incr;
+        if backend () = IsabelleHOL then
+          F.pp_print_string fmt "(";
         F.pp_print_string fmt field_name;
-        F.pp_print_space fmt ();
+        if backend () <> IsabelleHOL then
+          F.pp_print_space fmt ();
         F.pp_print_string fmt ":";
         F.pp_print_space fmt ();
+        if backend () = IsabelleHOL then
+          F.pp_print_string fmt "\"";
         extract_ty def.item_meta.span ctx fmt type_decl_group false f.field_ty;
-        if backend () <> Lean then F.pp_print_string fmt ";";
+        if backend () <> Lean && backend () <> IsabelleHOL then F.pp_print_string fmt ";";
+        if backend () = IsabelleHOL then
+          F.pp_print_string fmt "\")";
         (* Close the box for the field *)
         F.pp_close_box fmt ()
       in
@@ -1112,7 +1129,7 @@ let extract_type_decl_struct_body (ctx : extraction_ctx) (fmt : F.formatter)
       (* Close the box for the body *)
       F.pp_close_box fmt ();
       match backend () with
-      | Lean -> ()
+      | Lean | IsabelleHOL -> ()
       | FStar | Coq ->
           F.pp_print_space fmt ();
           F.pp_print_string fmt "}"
@@ -1136,7 +1153,7 @@ let extract_type_decl_struct_body (ctx : extraction_ctx) (fmt : F.formatter)
       in
       let def_name = ctx_get_local_type def.item_meta.span def.def_id ctx in
       extract_type_decl_variant def.item_meta.span ctx fmt type_decl_group
-        def_name type_params cg_params cons_name fields)
+        def_name type_params cg_params cons_name fields 0)
   in
   ()
 
@@ -1146,6 +1163,7 @@ let extract_comment (fmt : F.formatter) (sl : string list) : unit =
   let ld, space, rd =
     match backend () with
     | Coq | FStar | HOL4 -> ("(** ", 4, " *)")
+    | IsabelleHOL -> ("(*", 3, "*)")
     | Lean -> ("/- ", 3, " -/")
   in
   F.pp_open_vbox fmt space;
@@ -1263,7 +1281,7 @@ let extract_generic_params (span : Meta.span) (ctx : extraction_ctx)
         (const_generics : const_generic_var list)
         (trait_clauses : trait_clause list) : unit =
       (* Note that in HOL4 we don't print the type parameters. *)
-      if backend () <> HOL4 then (
+      if backend () <> HOL4 && backend () <> IsabelleHOL then (
         (* Print the type parameters *)
         if type_params <> [] then (
           insert_req_space ();
@@ -1437,7 +1455,7 @@ let extract_type_decl_gen (ctx : extraction_ctx) (fmt : F.formatter)
    * one line. Note however that in the case of Lean line breaks are important
    * for parsing: we thus use a hovbox. *)
   (match backend () with
-  | Coq | FStar | HOL4 -> F.pp_open_hvbox fmt 0
+  | Coq | FStar | HOL4 | IsabelleHOL -> F.pp_open_hvbox fmt 0
   | Lean ->
       if is_tuple_struct then F.pp_open_hvbox fmt 0 else F.pp_open_vbox fmt 0);
   (* Open a box for "type TYPE_NAME (TYPE_PARAMS CONST_GEN_PARAMS) =" *)
@@ -1479,7 +1497,7 @@ let extract_type_decl_gen (ctx : extraction_ctx) (fmt : F.formatter)
       | Lean ->
           if type_kind = Some Struct && kind = SingleNonRec then "where"
           else ":="
-      | HOL4 -> "="
+      | HOL4 | IsabelleHOL -> "="
     in
     F.pp_print_string fmt eq)
   else (
@@ -1519,6 +1537,11 @@ let extract_type_decl_gen (ctx : extraction_ctx) (fmt : F.formatter)
   F.pp_close_box fmt ();
   (* Add breaks to insert new lines between definitions *)
   if backend () <> HOL4 || decl_is_not_last_from_group kind then
+    F.pp_print_break fmt 0 0;
+
+  (* magic invocation to get field extractor functions & struct updates *)
+  if backend () = IsabelleHOL && type_kind = Some Struct then
+    F.pp_print_string fmt ("local_setup \\<open>Datatype_Records.mk_update_defs \\<^type_name>\\<open>"^def_name^"\\<close>\\<close>");
     F.pp_print_break fmt 0 0
 
 (** Extract an opaque type declaration to HOL4.
@@ -1558,6 +1581,7 @@ let extract_type_decl_hol4_opaque (ctx : extraction_ctx) (fmt : F.formatter)
     Remark (SH): having to treat this specific case separately is very annoying,
     but I could not find a better way.
  *)
+(* TODO: same must be done for Isabelle *)
 let extract_type_decl_hol4_empty_record (ctx : extraction_ctx)
     (fmt : F.formatter) (def : type_decl) : unit =
   (* Retrieve the definition name *)
@@ -1595,7 +1619,7 @@ let extract_type_decl (ctx : extraction_ctx) (fmt : F.formatter)
     match backend () with
     | FStar | Coq | Lean ->
         extract_type_decl_gen ctx fmt type_decl_group kind def extract_body
-    | HOL4 -> extract_type_decl_hol4_opaque ctx fmt def
+    | HOL4 | IsabelleHOL -> extract_type_decl_hol4_opaque ctx fmt def
 
 (** Generate a [Argument] instruction in Coq to allow omitting implicit
     arguments for variants, fields, etc..
@@ -1894,7 +1918,7 @@ let extract_type_decl_record_field_projectors (ctx : extraction_ctx)
 let extract_type_decl_extra_info (ctx : extraction_ctx) (fmt : F.formatter)
     (kind : decl_kind) (decl : type_decl) : unit =
   match backend () with
-  | FStar | HOL4 -> ()
+  | FStar | HOL4 | IsabelleHOL -> ()
   | Lean | Coq ->
       if
         not
@@ -1924,6 +1948,7 @@ let extract_state_type (fmt : F.formatter) (ctx : extraction_ctx)
       match backend () with
       | Coq -> "Axiom"
       | Lean -> "axiom"
+      | IsabelleHOL -> "axiomatization"
       | FStar | HOL4 -> raise (Failure "Unexpected")
     in
     F.pp_print_string fmt axiom;
@@ -1953,7 +1978,7 @@ let extract_state_type (fmt : F.formatter) (ctx : extraction_ctx)
           F.pp_print_string fmt "Type0"
       | HOL4 ->
           F.pp_print_string fmt ("val _ = new_type (\"" ^ state_name ^ "\", 0)")
-      | Coq | Lean -> print_axiom ())
+      | Coq | Lean | IsabelleHOL -> print_axiom ())
   | Declared -> (
       match backend () with
       | FStar ->
@@ -1966,7 +1991,7 @@ let extract_state_type (fmt : F.formatter) (ctx : extraction_ctx)
           F.pp_print_string fmt "Type0"
       | HOL4 ->
           F.pp_print_string fmt ("val _ = new_type (\"" ^ state_name ^ "\", 0)")
-      | Coq | Lean -> print_axiom ()));
+      | Coq | Lean | IsabelleHOL -> print_axiom ()));
   (* Close the box for the definition *)
   F.pp_close_box fmt ();
   (* Add breaks to insert new lines between definitions *)

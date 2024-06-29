@@ -512,7 +512,7 @@ let str_name () = if backend () = Lean then "String" else "string"
 let int_name (int_ty : integer_type) : string =
   let isize, usize, i_format, u_format =
     match backend () with
-    | FStar | Coq | HOL4 ->
+    | FStar | Coq | HOL4 | IsabelleHOL ->
         ("isize", "usize", format_of_string "i%d", format_of_string "u%d")
     | Lean -> ("Isize", "Usize", format_of_string "I%d", format_of_string "U%d")
   in
@@ -534,9 +534,9 @@ let scalar_name (ty : literal_type) : string =
   match ty with
   | TInteger ty -> int_name ty
   | TBool -> (
-      match backend () with FStar | Coq | HOL4 -> "bool" | Lean -> "Bool")
+      match backend () with FStar | Coq | HOL4 | IsabelleHOL -> "bool" | Lean -> "Bool")
   | TChar -> (
-      match backend () with FStar | Coq | HOL4 -> "char" | Lean -> "Char")
+      match backend () with FStar | Coq | HOL4 | IsabelleHOL -> "char" | Lean -> "Char")
 
 (** Extraction context.
 
@@ -799,7 +799,8 @@ let unop_name (unop : unop) : string =
       | FStar -> "not"
       | Lean -> "¬"
       | Coq -> "negb"
-      | HOL4 -> "~")
+      | HOL4 -> "~"
+      | IsabelleHOL -> "\\<not>")
   | Neg (int_ty : integer_type) -> (
       match backend () with Lean -> "-." | _ -> int_name int_ty ^ "_neg")
   | Cast _ ->
@@ -832,7 +833,7 @@ let named_binop_name (binop : E.binop) (int_ty : integer_type) : string =
   (* Remark: the Lean case is actually not used *)
   match backend () with
   | Lean -> int_name int_ty ^ "." ^ binop_s
-  | FStar | Coq | HOL4 -> int_name int_ty ^ "_" ^ binop_s
+  | FStar | Coq | HOL4 | IsabelleHOL -> int_name int_ty ^ "_" ^ binop_s
 
 (** A list of keywords/identifiers used by the backend and with which we
     want to check collision.
@@ -1047,6 +1048,32 @@ let keywords () =
           "then";
           "Theorem";
         ]
+    | IsabelleHOL ->
+        [
+          "axiomatization";
+          "case";
+          "definition";
+          "else";
+          "end";
+          "fix";
+          "function";
+          "fun";
+          "if";
+          "in";
+          "int";
+          "inductive";
+          "let";
+          "of";
+          "proof";
+          "lemma";
+          "qed";
+          "then";
+          "theorem";
+          "extract";
+          "o";
+          "value"
+          (* TODO: this list is very incomplete, and ironically probably contains things which aren't keywords *)
+        ]
   in
   List.concat [ named_unops; named_binops; misc ]
 
@@ -1055,7 +1082,7 @@ let assumed_adts () : (assumed_ty * string) list =
     if !use_state then
       match backend () with
       | Lean -> [ (TState, "State") ]
-      | Coq | FStar | HOL4 -> [ (TState, "state") ]
+      | Coq | FStar | HOL4 | IsabelleHOL -> [ (TState, "state") ]
     else []
   in
   (* We voluntarily omit the type [Error]: it is never directly
@@ -1073,7 +1100,7 @@ let assumed_adts () : (assumed_ty * string) list =
           (TRawPtr Mut, "MutRawPtr");
           (TRawPtr Const, "ConstRawPtr");
         ]
-    | Coq | FStar | HOL4 ->
+    | Coq | FStar | HOL4 | IsabelleHOL ->
         [
           (TResult, "result");
           (TFuel, if backend () = HOL4 then "num" else "nat");
@@ -1092,6 +1119,7 @@ let assumed_struct_constructors () : (assumed_ty * string) list =
   | Coq -> [ (TArray, "mk_array") ]
   | FStar -> [ (TArray, "mk_array") ]
   | HOL4 -> [ (TArray, "mk_array") ]
+  | IsabelleHOL -> [ (TArray, "mk_array") ]
 
 let assumed_variants () : (assumed_ty * VariantId.id * string) list =
   match backend () with
@@ -1132,10 +1160,19 @@ let assumed_variants () : (assumed_ty * VariantId.id * string) list =
         (* No Fuel::Zero on purpose *)
         (* No Fuel::Succ on purpose *)
       ]
+  | IsabelleHOL ->
+      [
+        (TResult, result_ok_id, "Ok");
+        (TResult, result_fail_id, "Fail");
+        (TError, error_failure_id, "Failure");
+        (TError, error_out_of_fuel_id, "OutOfFuel");
+        (* No Fuel::Zero on purpose *)
+        (* No Fuel::Succ on purpose *)
+      ]
 
 let assumed_llbc_functions () : (A.assumed_fun_id * string) list =
   match backend () with
-  | FStar | Coq | HOL4 ->
+  | FStar | Coq | HOL4 | IsabelleHOL ->
       [
         (ArrayIndexShared, "array_index_usize");
         (ArrayIndexMut, "array_index_mut_usize");
@@ -1173,6 +1210,9 @@ let assumed_pure_functions () : (pure_assumed_fun_id * string) list =
       (* We don't provide [FuelDecrease] and [FuelEqZero] on purpose *)
       [ (Return, "return"); (Fail, "fail_"); (Assert, "massert") ]
   | HOL4 ->
+      (* We don't provide [FuelDecrease] and [FuelEqZero] on purpose *)
+      [ (Return, "return"); (Fail, "fail"); (Assert, "massert") ]
+  | IsabelleHOL ->
       (* We don't provide [FuelDecrease] and [FuelEqZero] on purpose *)
       [ (Return, "return"); (Fail, "fail"); (Assert, "massert") ]
 
@@ -1310,6 +1350,15 @@ let type_decl_kind_to_qualif (span : Meta.span) (kind : decl_kind)
       | Assumed -> Some "axiom"
       | Declared -> Some "axiom")
   | HOL4 -> None
+  | IsabelleHOL -> (
+      match kind with
+      | SingleNonRec -> Some "datatype"
+      | SingleRec -> Some "datatype"
+      | MutRecFirst -> Some "datatype"
+      | MutRecInner -> Some "and"
+      | MutRecLast -> Some "and"
+      | Assumed -> Some "axiomatization"
+      | Declared -> Some "aximoatization")
 
 (** Compute the qualified for a function definition/declaration.
 
@@ -1347,6 +1396,15 @@ let fun_decl_kind_to_qualif (kind : decl_kind) : string option =
       | Assumed -> Some "axiom"
       | Declared -> Some "axiom")
   | HOL4 -> None
+  | IsabelleHOL -> (
+      match kind with
+      | SingleNonRec -> Some "fun"
+      | SingleRec -> Some "fun"
+      | MutRecFirst -> Some "fun"
+      | MutRecInner -> Some "and"
+      | MutRecLast -> Some "and"
+      | Assumed -> Some "axiomatization"
+      | Declared -> Some "axiomatization")
 
 (** The type of types.
 
@@ -1356,7 +1414,7 @@ let type_keyword (span : Meta.span) =
   match backend () with
   | FStar -> "Type0"
   | Coq | Lean -> "Type"
-  | HOL4 -> craise __FILE__ __LINE__ span "Unexpected"
+  | HOL4 | IsabelleHOL -> craise __FILE__ __LINE__ span "Unexpected"
 
 (** Helper *)
 let name_last_elem_as_ident (span : Meta.span) (n : llbc_name) : string =
@@ -1410,7 +1468,7 @@ let ctx_compute_type_name (item_meta : Types.item_meta) (ctx : extraction_ctx)
   match backend () with
   | FStar -> StringUtils.lowercase_first_letter (name ^ "_t")
   | Coq | HOL4 -> name ^ "_t"
-  | Lean -> name
+  | Lean | IsabelleHOL -> name
 
 (** Inputs:
     - type name
@@ -1447,7 +1505,7 @@ let ctx_compute_field_name (def : type_decl) (field_meta : Meta.attr_info)
       ^ "_" ^ field_name_s
   in
   match backend () with
-  | Lean | HOL4 -> name
+  | Lean | HOL4 | IsabelleHOL -> name
   | Coq | FStar -> StringUtils.lowercase_first_letter name
 
 (** Inputs:
@@ -1461,7 +1519,7 @@ let ctx_compute_variant_name (ctx : extraction_ctx) (def : type_decl)
     Option.value variant.attr_info.rename ~default:variant.variant_name
   in
   match backend () with
-  | FStar | Coq | HOL4 ->
+  | FStar | Coq | HOL4 | IsabelleHOL ->
       let variant = to_camel_case variant in
       (* Prefix the name of the variant with the name of the type, if necessary
          (some backends don't support collision of variant names) *)
@@ -1494,14 +1552,14 @@ let ctx_compute_fun_name_no_suffix (span : Meta.span) (ctx : extraction_ctx)
   (* TODO: don't convert to snake case for Coq, HOL4, F* *)
   let fname = flatten_name fname in
   match backend () with
-  | FStar | Coq | HOL4 -> StringUtils.lowercase_first_letter fname
+  | FStar | Coq | HOL4 | IsabelleHOL -> StringUtils.lowercase_first_letter fname
   | Lean -> fname
 
 (** Provided a basename, compute the name of a global declaration. *)
 let ctx_compute_global_name (span : Meta.span) (ctx : extraction_ctx)
     (name : llbc_name) : string =
   match Config.backend () with
-  | Coq | FStar | HOL4 ->
+  | Coq | FStar | HOL4 | IsabelleHOL ->
       let parts =
         List.map to_snake_case (ctx_compute_simple_name span ctx name)
       in
@@ -1582,7 +1640,7 @@ let ctx_compute_trait_impl_name (ctx : extraction_ctx) (trait_decl : trait_decl)
   (* Additional modifications to make sure we comply with the backends restrictions *)
   match backend () with
   | FStar -> StringUtils.lowercase_first_letter name
-  | Coq | HOL4 | Lean -> name
+  | Coq | HOL4 | Lean | IsabelleHOL -> name
 
 let ctx_compute_trait_decl_constructor (ctx : extraction_ctx)
     (trait_decl : trait_decl) : string =
@@ -1659,7 +1717,7 @@ let ctx_compute_trait_parent_clause_name (ctx : extraction_ctx)
   let clause = clause ^ "Inst" in
   match backend () with
   | FStar -> StringUtils.lowercase_first_letter clause
-  | Coq | HOL4 | Lean -> clause
+  | Coq | HOL4 | Lean | IsabelleHOL -> clause
 
 let ctx_compute_trait_type_name (ctx : extraction_ctx) (trait_decl : trait_decl)
     (item : string) : string =
@@ -1676,7 +1734,7 @@ let ctx_compute_trait_type_name (ctx : extraction_ctx) (trait_decl : trait_decl)
      can't disambiguate fields coming from different ADTs if they have the same
      names), and thus don't need to add a prefix starting with a lowercase.
   *)
-  match backend () with FStar -> "t" ^ name | Coq | Lean | HOL4 -> name
+  match backend () with FStar -> "t" ^ name | Coq | Lean | HOL4 | IsabelleHOL -> name
 
 let ctx_compute_trait_const_name (ctx : extraction_ctx)
     (trait_decl : trait_decl) (item : string) : string =
@@ -1685,7 +1743,7 @@ let ctx_compute_trait_const_name (ctx : extraction_ctx)
     else ctx_compute_trait_decl_name ctx trait_decl ^ "_" ^ item
   in
   (* See [trait_type_name] *)
-  match backend () with FStar -> "c" ^ name | Coq | Lean | HOL4 -> name
+  match backend () with FStar -> "c" ^ name | Coq | Lean | HOL4 | IsabelleHOL -> name
 
 let ctx_compute_trait_method_name (ctx : extraction_ctx)
     (trait_decl : trait_decl) (item : string) : string =
@@ -1723,7 +1781,7 @@ let ctx_compute_termination_measure_name (span : Meta.span)
     match Config.backend () with
     | FStar -> "_decreases"
     | Lean -> "_terminates"
-    | Coq | HOL4 -> craise __FILE__ __LINE__ span "Unexpected"
+    | Coq | HOL4 | IsabelleHOL -> craise __FILE__ __LINE__ span "Unexpected"
   in
   (* Concatenate *)
   fname ^ lp_suffix ^ suffix
@@ -1751,7 +1809,7 @@ let ctx_compute_decreases_proof_name (span : Meta.span) (ctx : extraction_ctx)
   let suffix =
     match Config.backend () with
     | Lean -> "_decreases"
-    | FStar | Coq | HOL4 -> craise __FILE__ __LINE__ span "Unexpected"
+    | FStar | Coq | HOL4 | IsabelleHOL -> craise __FILE__ __LINE__ span "Unexpected"
   in
   (* Concatenate *)
   fname ^ lp_suffix ^ suffix
@@ -1792,7 +1850,7 @@ let ctx_compute_var_basename (span : Meta.span) (ctx : extraction_ctx)
       (* This should be a no-op *)
       match Config.backend () with
       | Lean -> basename
-      | FStar | Coq | HOL4 -> to_snake_case basename)
+      | FStar | Coq | HOL4 | IsabelleHOL -> to_snake_case basename)
   | None -> (
       (* No basename: we use the first letter of the type *)
       match ty with
@@ -1824,7 +1882,7 @@ let ctx_compute_var_basename (span : Meta.span) (ctx : extraction_ctx)
           (* TODO: use "t" also for F* *)
           match backend () with
           | FStar -> "x" (* lacking inspiration here... *)
-          | Coq | Lean | HOL4 -> "t" (* lacking inspiration here... *))
+          | Coq | Lean | HOL4 | IsabelleHOL -> "t" (* lacking inspiration here... *))
       | TLiteral lty -> (
           match lty with TBool -> "b" | TChar -> "c" | TInteger _ -> "i")
       | TArrow _ -> "f"
@@ -1839,7 +1897,7 @@ let ctx_compute_type_var_basename (_ctx : extraction_ctx) (basename : string) :
   | FStar ->
       (* This is *not* a no-op: this removes the capital letter *)
       to_snake_case basename
-  | HOL4 ->
+  | HOL4 | IsabelleHOL ->
       (* In HOL4, type variable names must start with "'" *)
       "'" ^ to_snake_case basename
   | Coq | Lean -> basename
@@ -1849,7 +1907,7 @@ let ctx_compute_const_generic_var_basename (_ctx : extraction_ctx)
     (basename : string) : string =
   (* Rust type variables are snake-case and start with a capital letter *)
   match backend () with
-  | FStar | HOL4 ->
+  | FStar | HOL4 | IsabelleHOL ->
       (* This is *not* a no-op: this removes the capital letter *)
       to_snake_case basename
   | Coq | Lean -> basename
@@ -1871,7 +1929,7 @@ let ctx_compute_trait_clause_basename (ctx : extraction_ctx)
   in
   let clause = clause ^ "Inst" in
   match backend () with
-  | FStar | Coq | HOL4 -> StringUtils.lowercase_first_letter clause
+  | FStar | Coq | HOL4 | IsabelleHOL -> StringUtils.lowercase_first_letter clause
   | Lean -> clause
 
 let trait_self_clause_basename = "self_clause"

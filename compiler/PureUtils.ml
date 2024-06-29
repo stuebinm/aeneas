@@ -243,7 +243,7 @@ let rec let_group_requires_parentheses (span : Meta.span) (e : texpression) :
 let texpression_requires_parentheses span e =
   match Config.backend () with
   | FStar | Lean -> false
-  | Coq | HOL4 -> let_group_requires_parentheses span e
+  | Coq | HOL4 | IsabelleHOL -> let_group_requires_parentheses span e
 
 let is_var (e : texpression) : bool =
   match e.e with Var _ -> true | _ -> false

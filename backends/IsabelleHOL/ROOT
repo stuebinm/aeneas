@@ -1,0 +1,6 @@
+session Aeneas = "HOL-Library" +
+  options [document = pdf, document_output = "output"]
+  theories [document = false]
+    Primitives
+  document_files
+    "root.tex"
